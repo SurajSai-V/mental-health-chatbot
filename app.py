@@ -13,7 +13,6 @@ load_dotenv()
 
 app = Flask(__name__)
 
-# Firebase init — uses env variable on Render, falls back to file locally
 try:
     firebase_creds_json = os.environ.get('FIREBASE_CREDENTIALS')
     if firebase_creds_json:
@@ -21,12 +20,8 @@ try:
         cred = credentials.Certificate(firebase_creds)
     else:
         cred = credentials.Certificate('serviceAccountKey.json')
-
     firebase_admin.initialize_app(cred, {
-        'databaseURL': os.environ.get(
-            'FIREBASE_DATABASE_URL',
-            'https://mental-health-chatbot-4db12-default-rtdb.asia-southeast1.firebasedatabase.app'
-        )
+        'databaseURL': os.environ.get('FIREBASE_DATABASE_URL', 'https://mental-health-chatbot-4db12-default-rtdb.asia-southeast1.firebasedatabase.app')
     })
     print("Firebase initialized successfully")
 except Exception as e:
@@ -57,21 +52,17 @@ SAFETY:
 }
 
 
-# ─── AUTH HELPER ────────────────────────────────────────────────────────────────
-
-def verify_user(req):
-    token = req.headers.get('Authorization', '').replace('Bearer ', '')
+def verify_user(request):
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
     if not token:
         return None
     try:
         decoded = firebase_auth.verify_id_token(token)
         return decoded['uid']
     except Exception as e:
-        print(f"Token verification failed: {e}")
+        print(f"Token verification error: {e}")
         return None
 
-
-# ─── SESSION HELPERS ─────────────────────────────────────────────────────────────
 
 def get_session_history(uid, session_id):
     ref = db.reference(f'users/{uid}/sessions/{session_id}/messages')
@@ -99,7 +90,7 @@ def create_session(uid, session_id, title):
     })
 
 
-def get_ai_response(uid, session_id, message, sentiment):
+def get_ai_response(uid, message, sentiment, session_id):
     if sentiment > 0.2:
         mood = "The user seems to be in a positive mood."
     elif sentiment < -0.2:
@@ -109,7 +100,6 @@ def get_ai_response(uid, session_id, message, sentiment):
 
     user_content = f"{message} (Note for AI only: {mood})"
     save_session_message(uid, session_id, 'user', user_content)
-
     history = get_session_history(uid, session_id)
 
     response = client.chat.completions.create(
@@ -122,8 +112,6 @@ def get_ai_response(uid, session_id, message, sentiment):
     save_session_message(uid, session_id, 'assistant', reply)
     return reply
 
-
-# ─── ROUTES ──────────────────────────────────────────────────────────────────────
 
 @app.route('/')
 def home():
@@ -191,16 +179,19 @@ def chat():
     try:
         data = request.json
         message = data.get('message', '')
-        session_id = data.get('session_id') or str(uuid.uuid4())
+        session_id = data.get('session_id', '')
         is_new_session = data.get('is_new_session', False)
 
-        if is_new_session or not data.get('session_id'):
+        if not session_id:
+            session_id = str(uuid.uuid4())
+            is_new_session = True
+
+        if is_new_session:
             create_session(uid, session_id, message)
 
         sentiment = TextBlob(message).sentiment.polarity
-        response = get_ai_response(uid, session_id, message, sentiment)
+        response = get_ai_response(uid, message, sentiment, session_id)
 
-        # Also log to flat conversations for mood analysis
         db.reference(f'users/{uid}/conversations').push({
             'user_message': message,
             'sentiment_score': sentiment,
@@ -249,22 +240,24 @@ def cbt():
     if not uid:
         return jsonify({'error': 'Unauthorized'}), 401
     try:
-        mood = request.json.get('mood', '')
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[
-                {
-                    "role": "system",
-                    "content": """You are a CBT (Cognitive Behavioral Therapy) counselor.
+        data = request.json
+        mood = data.get('mood', '')
+        messages = [
+            {
+                "role": "system",
+                "content": """You are a CBT (Cognitive Behavioral Therapy) counselor.
 Give practical, evidence-based CBT guidance for the user's emotional state.
 Structure your response with:
 1. A brief validation of their feeling (1 sentence)
 2. One key CBT technique relevant to their situation
 3. A short actionable exercise they can do right now
 Keep it warm, practical, and under 150 words."""
-                },
-                {"role": "user", "content": f"I am feeling: {mood}"}
-            ],
+            },
+            {"role": "user", "content": f"I am feeling: {mood}"}
+        ]
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=messages,
             max_tokens=200
         )
         return jsonify({'advice': response.choices[0].message.content})
@@ -322,18 +315,19 @@ def analysis_summary():
         scores = [e.get('sentiment_score', 0) for e in recent]
         avg = sum(scores) / len(scores)
         messages_summary = ' | '.join([e.get('user_message', '')[:60] for e in recent[-10:]])
+        prompt_messages = [
+            {
+                "role": "system",
+                "content": "You are a compassionate mental health analyst. Analyze the user's recent chat data and provide a warm, insightful 3-4 sentence summary of their emotional patterns over the past month. Be encouraging and constructive."
+            },
+            {
+                "role": "user",
+                "content": f"My recent messages: {messages_summary}\nAverage sentiment score: {avg:.2f} (range -1 to 1, negative is distressed, positive is happy)"
+            }
+        ]
         response = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are a compassionate mental health analyst. Analyze the user's recent chat data and provide a warm, insightful 3-4 sentence summary of their emotional patterns over the past month. Be encouraging and constructive."
-                },
-                {
-                    "role": "user",
-                    "content": f"My recent messages: {messages_summary}\nAverage sentiment score: {avg:.2f} (range -1 to 1, negative is distressed, positive is happy)"
-                }
-            ],
+            messages=prompt_messages,
             max_tokens=200
         )
         return jsonify({'summary': response.choices[0].message.content})
