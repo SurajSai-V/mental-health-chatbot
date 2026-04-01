@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify, render_template
 from textblob import TextBlob
 import firebase_admin
-from firebase_admin import credentials, db
+from firebase_admin import credentials, db, auth as firebase_auth
 import datetime
 import uuid
 from groq import Groq
@@ -50,6 +50,16 @@ SAFETY:
 - If someone is in danger, always suggest contacting a professional or crisis helpline.
 - You are not a therapist but you care deeply."""
 }
+
+def verify_user(request):
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    if not token:
+        return None
+    try:
+        decoded = firebase_auth.verify_id_token(token)
+        return decoded['uid']
+    except:
+        return None
 
 
 def get_session_history(session_id):
@@ -171,7 +181,7 @@ def chat():
         sentiment = TextBlob(message).sentiment.polarity
         response = get_ai_response(message, sentiment, session_id)
 
-        db.reference('conversations').push({
+        db.reference(f'users/{uid}/conversations').push({
             'user_message': message,
             'sentiment_score': sentiment,
             'bot_response': response,
@@ -298,7 +308,15 @@ def analysis_summary():
     except Exception as e:
         print("ERROR /analysis/summary:", e)
         return jsonify({'summary': 'Error generating summary.'}), 500
-
+    
+@app.route('/verify-token', methods=['POST'])
+def verify_token():
+    try:
+        token = request.json.get('token')
+        decoded = auth.verify_id_token(token)
+        return jsonify({'uid': decoded['uid'], 'email': decoded.get('email'), 'name': decoded.get('name', ''), 'picture': decoded.get('picture', '')})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 401
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
