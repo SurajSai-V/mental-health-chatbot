@@ -13,6 +13,7 @@ load_dotenv()
 
 app = Flask(__name__)
 
+# Firebase init — uses env variable on Render, falls back to file locally
 try:
     firebase_creds_json = os.environ.get('FIREBASE_CREDENTIALS')
     if firebase_creds_json:
@@ -20,8 +21,12 @@ try:
         cred = credentials.Certificate(firebase_creds)
     else:
         cred = credentials.Certificate('serviceAccountKey.json')
+
     firebase_admin.initialize_app(cred, {
-        'databaseURL': os.environ.get('FIREBASE_DATABASE_URL', 'https://mental-health-chatbot-4db12-default-rtdb.asia-southeast1.firebasedatabase.app')
+        'databaseURL': os.environ.get(
+            'FIREBASE_DATABASE_URL',
+            'https://mental-health-chatbot-4db12-default-rtdb.asia-southeast1.firebasedatabase.app'
+        )
     })
     print("Firebase initialized successfully")
 except Exception as e:
@@ -51,19 +56,25 @@ SAFETY:
 - You are not a therapist but you care deeply."""
 }
 
-def verify_user(request):
-    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+
+# ─── AUTH HELPER ────────────────────────────────────────────────────────────────
+
+def verify_user(req):
+    token = req.headers.get('Authorization', '').replace('Bearer ', '')
     if not token:
         return None
     try:
         decoded = firebase_auth.verify_id_token(token)
         return decoded['uid']
-    except:
+    except Exception as e:
+        print(f"Token verification failed: {e}")
         return None
 
 
-def get_session_history(session_id):
-    ref = db.reference(f'sessions/{session_id}/messages')
+# ─── SESSION HELPERS ─────────────────────────────────────────────────────────────
+
+def get_session_history(uid, session_id):
+    ref = db.reference(f'users/{uid}/sessions/{session_id}/messages')
     data = ref.get()
     messages = [SYSTEM_PROMPT]
     if data:
@@ -73,22 +84,22 @@ def get_session_history(session_id):
     return messages
 
 
-def save_session_message(session_id, role, content):
-    db.reference(f'sessions/{session_id}/messages').push({
+def save_session_message(uid, session_id, role, content):
+    db.reference(f'users/{uid}/sessions/{session_id}/messages').push({
         'role': role,
         'content': content,
         'timestamp': datetime.datetime.now().isoformat()
     })
 
 
-def create_session(session_id, title):
-    db.reference(f'sessions/{session_id}').update({
+def create_session(uid, session_id, title):
+    db.reference(f'users/{uid}/sessions/{session_id}').update({
         'title': title[:40],
         'timestamp': datetime.datetime.now().isoformat()
     })
 
 
-def get_ai_response(message, sentiment, session_id):
+def get_ai_response(uid, session_id, message, sentiment):
     if sentiment > 0.2:
         mood = "The user seems to be in a positive mood."
     elif sentiment < -0.2:
@@ -97,8 +108,9 @@ def get_ai_response(message, sentiment, session_id):
         mood = "The user seems to be in a neutral mood."
 
     user_content = f"{message} (Note for AI only: {mood})"
-    save_session_message(session_id, 'user', user_content)
-    history = get_session_history(session_id)
+    save_session_message(uid, session_id, 'user', user_content)
+
+    history = get_session_history(uid, session_id)
 
     response = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
@@ -107,9 +119,11 @@ def get_ai_response(message, sentiment, session_id):
     )
 
     reply = response.choices[0].message.content
-    save_session_message(session_id, 'assistant', reply)
+    save_session_message(uid, session_id, 'assistant', reply)
     return reply
 
+
+# ─── ROUTES ──────────────────────────────────────────────────────────────────────
 
 @app.route('/')
 def home():
@@ -118,8 +132,11 @@ def home():
 
 @app.route('/sessions', methods=['GET'])
 def get_sessions():
+    uid = verify_user(request)
+    if not uid:
+        return jsonify({'error': 'Unauthorized'}), 401
     try:
-        ref = db.reference('sessions')
+        ref = db.reference(f'users/{uid}/sessions')
         data = ref.get()
         if not data:
             return jsonify([])
@@ -141,8 +158,11 @@ def get_sessions():
 
 @app.route('/sessions/<session_id>/messages', methods=['GET'])
 def get_session_messages(session_id):
+    uid = verify_user(request)
+    if not uid:
+        return jsonify({'error': 'Unauthorized'}), 401
     try:
-        ref = db.reference(f'sessions/{session_id}/messages')
+        ref = db.reference(f'users/{uid}/sessions/{session_id}/messages')
         data = ref.get()
         if not data:
             return jsonify([])
@@ -165,22 +185,22 @@ def get_session_messages(session_id):
 
 @app.route('/chat', methods=['POST'])
 def chat():
+    uid = verify_user(request)
+    if not uid:
+        return jsonify({'error': 'Unauthorized'}), 401
     try:
         data = request.json
         message = data.get('message', '')
-        session_id = data.get('session_id', '')
+        session_id = data.get('session_id') or str(uuid.uuid4())
         is_new_session = data.get('is_new_session', False)
 
-        if not session_id:
-            session_id = str(uuid.uuid4())
-            is_new_session = True
-
-        if is_new_session:
-            create_session(session_id, message)
+        if is_new_session or not data.get('session_id'):
+            create_session(uid, session_id, message)
 
         sentiment = TextBlob(message).sentiment.polarity
-        response = get_ai_response(message, sentiment, session_id)
+        response = get_ai_response(uid, session_id, message, sentiment)
 
+        # Also log to flat conversations for mood analysis
         db.reference(f'users/{uid}/conversations').push({
             'user_message': message,
             'sentiment_score': sentiment,
@@ -201,17 +221,23 @@ def chat():
 
 @app.route('/clear/<session_id>', methods=['POST'])
 def clear_session(session_id):
+    uid = verify_user(request)
+    if not uid:
+        return jsonify({'error': 'Unauthorized'}), 401
     try:
-        db.reference(f'sessions/{session_id}/messages').delete()
-        return jsonify({'message': 'Session messages cleared'})
+        db.reference(f'users/{uid}/sessions/{session_id}/messages').delete()
+        return jsonify({'message': 'Session cleared'})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 
 @app.route('/delete/<session_id>', methods=['POST'])
 def delete_session(session_id):
+    uid = verify_user(request)
+    if not uid:
+        return jsonify({'error': 'Unauthorized'}), 401
     try:
-        db.reference(f'sessions/{session_id}').delete()
+        db.reference(f'users/{uid}/sessions/{session_id}').delete()
         return jsonify({'message': 'Session deleted'})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -219,25 +245,26 @@ def delete_session(session_id):
 
 @app.route('/cbt', methods=['POST'])
 def cbt():
+    uid = verify_user(request)
+    if not uid:
+        return jsonify({'error': 'Unauthorized'}), 401
     try:
-        data = request.json
-        mood = data.get('mood', '')
-        messages = [
-            {
-                "role": "system",
-                "content": """You are a CBT (Cognitive Behavioral Therapy) counselor.
+        mood = request.json.get('mood', '')
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {
+                    "role": "system",
+                    "content": """You are a CBT (Cognitive Behavioral Therapy) counselor.
 Give practical, evidence-based CBT guidance for the user's emotional state.
 Structure your response with:
 1. A brief validation of their feeling (1 sentence)
 2. One key CBT technique relevant to their situation
 3. A short actionable exercise they can do right now
 Keep it warm, practical, and under 150 words."""
-            },
-            {"role": "user", "content": f"I am feeling: {mood}"}
-        ]
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=messages,
+                },
+                {"role": "user", "content": f"I am feeling: {mood}"}
+            ],
             max_tokens=200
         )
         return jsonify({'advice': response.choices[0].message.content})
@@ -248,8 +275,11 @@ Keep it warm, practical, and under 150 words."""
 
 @app.route('/analysis/stats', methods=['GET'])
 def analysis_stats():
+    uid = verify_user(request)
+    if not uid:
+        return jsonify({'error': 'Unauthorized'}), 401
     try:
-        ref = db.reference('conversations')
+        ref = db.reference(f'users/{uid}/conversations')
         data = ref.get()
         if not data:
             return jsonify({'total': 0, 'positive': 0, 'negative': 0, 'trend': []})
@@ -276,11 +306,14 @@ def analysis_stats():
 
 @app.route('/analysis/summary', methods=['POST'])
 def analysis_summary():
+    uid = verify_user(request)
+    if not uid:
+        return jsonify({'error': 'Unauthorized'}), 401
     try:
-        ref = db.reference('conversations')
+        ref = db.reference(f'users/{uid}/conversations')
         data = ref.get()
         if not data:
-            return jsonify({'summary': 'No conversation data found yet. Start chatting to see your mood analysis!'})
+            return jsonify({'summary': 'No conversation data yet. Start chatting to see your mood analysis!'})
         entries = list(data.values())
         cutoff = (datetime.datetime.now() - datetime.timedelta(days=30)).isoformat()
         recent = [e for e in entries if e.get('timestamp', '') >= cutoff]
@@ -289,34 +322,25 @@ def analysis_summary():
         scores = [e.get('sentiment_score', 0) for e in recent]
         avg = sum(scores) / len(scores)
         messages_summary = ' | '.join([e.get('user_message', '')[:60] for e in recent[-10:]])
-        prompt_messages = [
-            {
-                "role": "system",
-                "content": "You are a compassionate mental health analyst. Analyze the user's recent chat data and provide a warm, insightful 3-4 sentence summary of their emotional patterns over the past month. Be encouraging and constructive."
-            },
-            {
-                "role": "user",
-                "content": f"My recent messages: {messages_summary}\nAverage sentiment score: {avg:.2f} (range -1 to 1, negative is distressed, positive is happy)"
-            }
-        ]
         response = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
-            messages=prompt_messages,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a compassionate mental health analyst. Analyze the user's recent chat data and provide a warm, insightful 3-4 sentence summary of their emotional patterns over the past month. Be encouraging and constructive."
+                },
+                {
+                    "role": "user",
+                    "content": f"My recent messages: {messages_summary}\nAverage sentiment score: {avg:.2f} (range -1 to 1, negative is distressed, positive is happy)"
+                }
+            ],
             max_tokens=200
         )
         return jsonify({'summary': response.choices[0].message.content})
     except Exception as e:
         print("ERROR /analysis/summary:", e)
         return jsonify({'summary': 'Error generating summary.'}), 500
-    
-@app.route('/verify-token', methods=['POST'])
-def verify_token():
-    try:
-        token = request.json.get('token')
-        decoded = auth.verify_id_token(token)
-        return jsonify({'uid': decoded['uid'], 'email': decoded.get('email'), 'name': decoded.get('name', ''), 'picture': decoded.get('picture', '')})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 401
+
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
