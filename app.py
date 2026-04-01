@@ -12,7 +12,13 @@ load_dotenv()
 
 app = Flask(__name__)
 
-cred = credentials.Certificate('serviceAccountKey.json')
+import json
+firebase_creds_json = os.environ.get('FIREBASE_CREDENTIALS')
+if firebase_creds_json:
+    firebase_creds = json.loads(firebase_creds_json)
+    cred = credentials.Certificate(firebase_creds)
+else:
+    cred = credentials.Certificate('serviceAccountKey.json')
 firebase_admin.initialize_app(cred, {
     'databaseURL': 'https://mental-health-chatbot-4db12-default-rtdb.asia-southeast1.firebasedatabase.app'
 })
