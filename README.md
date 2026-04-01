@@ -3,7 +3,7 @@
 > A full-stack AI chatbot that provides real-time emotional support, CBT-based counseling, and mood analysis — deployed and live.
 
 **Live Demo:** [your-app-name.onrender.com](https://your-app-name.onrender.com)  
-**Built by:** Suraj Sai V | [GitHub](https://github.com/SurajSai-V) | [LinkedIn](https://linkedin.com/in/your-linkedin)
+**Built by:** Suraj Sai V | [GitHub](https://github.com/SurajSai-V) | [LinkedIn](https://www.linkedin.com/in/suraj-sai-v-a682802a0/)
 
 ---
 
@@ -180,4 +180,4 @@ MoodBoost provides emotional support and is not a substitute for professional me
 
 ---
 
-*Built as part of my cloud engineering learning journey — Sathyabama Institute of Science and Technology, 2024*
+*Built as part of my cloud engineering learning journey — Sathyabama Institute of Science and Technology, 2025*
