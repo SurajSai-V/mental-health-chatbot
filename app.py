@@ -20,7 +20,7 @@ if firebase_creds_json:
 else:
     cred = credentials.Certificate('serviceAccountKey.json')
 firebase_admin.initialize_app(cred, {
-    'databaseURL': 'https://mental-health-chatbot-4db12-default-rtdb.asia-southeast1.firebasedatabase.app'
+    'databaseURL': os.environ.get('FIREBASE_DATABASE_URL', 'https://mental-health-chatbot-4db12-default-rtdb.asia-southeast1.firebasedatabase.app')
 })
 
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
