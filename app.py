@@ -27,6 +27,7 @@ try:
 except Exception as e:
     print(f"Firebase initialization error: {e}")
 
+client = None
 try:
     client = Groq(api_key=os.getenv("GROQ_API_KEY"))
     print("Groq initialized successfully")
@@ -89,6 +90,9 @@ def create_session(uid, session_id, title):
         'timestamp': datetime.datetime.now().isoformat()
     })
 
+def get_ai_response(uid, session_id, message, sentiment):
+    if not client:
+        return "Service is temporarily unavailable. Please try again in a moment."
 
 def get_ai_response(uid, message, sentiment, session_id):
     if sentiment > 0.2:
