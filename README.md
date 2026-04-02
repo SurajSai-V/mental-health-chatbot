@@ -2,7 +2,7 @@
 
 > A full-stack AI chatbot that provides real-time emotional support, CBT-based counseling, and mood analysis — deployed and live.
 
-**Live Demo:** [your-app-name.onrender.com](https://your-app-name.onrender.com)  
+**Live Demo:** [mental-health-chatbot-qva0.onrender.com](https://mental-health-chatbot-qva0.onrender.com)  
 **Built by:** Suraj Sai V | [GitHub](https://github.com/SurajSai-V) | [LinkedIn](https://www.linkedin.com/in/suraj-sai-v-a682802a0/)
 
 ---
